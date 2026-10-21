@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>PrintMaster — точная печать 1:1</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style id="pageStyle">@page{size:A4;margin:0}</style>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font:14px system-ui,Segoe UI,Arial,sans-serif;color:#e8e8e8;background:#2b2b2b}
+button,select,input,textarea{font:inherit}
+button{background:#3d3d3d;color:#eee;border:1px solid #555;border-radius:6px;padding:6px 10px;cursor:pointer}
+button:hover{background:#4a4a4a}
+button.pri{background:#0a84ff;border-color:#0a84ff;color:#fff}
+input[type=number],input[type=text],select,textarea{background:#1f1f1f;color:#eee;border:1px solid #555;border-radius:5px;padding:4px 6px;width:100%}
+#app{display:flex;flex-direction:column;height:100%}
+#bar{display:flex;gap:6px;flex-wrap:wrap;padding:8px;background:#222;border-bottom:1px solid #444}
+#main{flex:1;display:flex;min-height:0}
+#view{flex:1;overflow:auto;background:#5c5c5c}
+#pad{padding:40px;display:inline-block}
+#sheetWrap{position:relative}
+#sheet{position:absolute;left:0;top:0;transform-origin:0 0;background:#fff;box-shadow:0 4px 18px rgba(0,0,0,.5);--z:1}
+.fold{position:absolute;top:0;bottom:0;left:50%;border-left:.2mm dashed #999;pointer-events:none}
+.it{position:absolute;cursor:move;user-select:none;-webkit-user-select:none}
+.it.sel{outline:calc(1.5px / var(--z)) dashed #0a84ff}
+.it .tx{width:100%;height:100%;overflow:hidden;white-space:pre-wrap;line-height:1.2;word-break:break-word}
+.it .hd{display:none;position:absolute;right:0;bottom:0;width:calc(12px / var(--z));height:calc(12px / var(--z));background:#0a84ff;cursor:nwse-resize}
+.it.sel .hd{display:block}
+#side{width:340px;overflow:auto;background:#262626;border-left:1px solid #444;padding:8px}
+fieldset{border:1px solid #484848;border-radius:8px;margin:0 0 10px;padding:8px}
+legend{padding:0 6px;color:#9ab}
+fieldset.off{opacity:.35;pointer-events:none}
+.g{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:6px;align-items:center}
+.g .full{grid-column:1/-1}
+.g .half{grid-column:span 2}
+label.c{display:flex;gap:6px;align-items:center}
+label.c input{width:auto}
+#status{padding:4px 10px;background:#222;border-top:1px solid #444;color:#aaa;font-size:12px}
+.tip{font-size:12px;color:#9aa;margin-top:6px}
+#pvWrap{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;flex-direction:column;align-items:center}
+#pvWrap.open{display:flex}
+.pvbar{padding:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+#pvStage{position:relative;background:#fff;box-shadow:0 0 20px #000;overflow:hidden}
+#pp{position:absolute;left:0;top:0;transform-origin:0 0;background:#fff;overflow:hidden}
+#pp .ps{position:absolute;overflow:hidden}
+@media print{
+  html,body{margin:0!important;padding:0!important;background:#fff!important;height:auto!important;overflow:hidden!important}
+  #app{display:none!important}
+  #pvWrap{display:block!important;position:static!important;background:none!important}
+  .pvbar{display:none!important}
+  #pvStage{position:static!important;width:auto!important;height:auto!important;box-shadow:none!important;overflow:visible!important}
+  #pp{position:relative!important;transform:none!important}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <button class="pri" onclick="$('fileImg').click()">+ Фото</button>
+    <button onclick="addText()">+ Текст</button>
+    <button onclick="doUndo()">↶ Отмена (Ctrl+Z)</button>
+    <button onclick="$('fileProj').click()">Открыть проект</button>
+    <button onclick="saveProject()">Сохранить проект</button>
+    <button onclick="zoomBy(1.2)">＋</button>
+    <button onclick="zoomBy(1/1.2)">－</button>
+    <button onclick="fitZoom()">Вписать</button>
+    <button class="pri" onclick="showPreview()">🖨 Предпросмотр и печать</button>
+  </div>
+  <div id="main">
+    <div id="view"><div id="pad"><div id="sheetWrap"><div id="sheet"></div></div></div></div>
+    <div id="side">
+      <fieldset><legend>Лист</legend>
+        <div class="g">
+          <select id="preset" class="full"></select>
+          <span>Ш</span><input type="number" id="sw" step="1" min="10"><span>В</span><input type="number" id="sh" step="1" min="10">
+          <label class="c half"><input type="checkbox" id="grid" checked>Клетка</label><span>шаг</span><input type="number" id="gstep" value="5" step="0.5" min="1">
+          <span>сдвиг X</span><input type="number" id="gx" value="0" step="0.1"><span>Y</span><input type="number" id="gy" value="0" step="0.1">
+          <span class="half">Привязка</span>
+          <select id="snap" class="half"><option value="0">Нет</option><option value="0.5">0,5 мм</option><option value="1">1 мм</option><option value="5">5 мм</option></select>
+        </div>
+      </fieldset>
+
+      <fieldset id="objG" class="off"><legend>Объект (мм)</legend>
+        <div class="g">
+          <span>X</span><input type="number" id="x" step="0.1"><span>Y</span><input type="number" id="y" step="0.1">
+          <span>Ширина</span><input type="number" id="w" step="0.1" min="1"><span>Высота</span><input type="number" id="h" step="0.1" min="1">
+          <label class="c full"><input type="checkbox" id="keep">Сохранять пропорции</label>
+          <button class="half" data-al="tl">↖ Угол (0, 0)</button><button class="half" data-al="tr">↗ Правый верх</button>
+          <button class="half" data-al="bl">↙ Левый низ</button><button class="half" data-al="br">↘ Правый низ</button>
+          <button class="half" data-al="cx">↔ По центру X</button><button class="half" data-al="cy">↕ По центру Y</button>
+          <button class="half" data-al="c">✛ По центру листа</button><button class="half" data-al="fit">Вписать в лист</button>
+          <button class="half" onclick="zOrder(1)">На передний</button><button class="half" onclick="zOrder(-1)">На задний</button>
+          <button class="half" onclick="dupItem()">Дублировать</button><button class="half" onclick="delItem()">Удалить</button>
+        </div>
+      </fieldset>
+
+      <fieldset id="imgG" class="off"><legend>Фото</legend>
+        <div class="g">
+          <span class="half">Непрозрачность</span><input type="range" id="alpha" min="5" max="100" value="100" class="half">
+          <button class="half" onclick="rotImg()">Повернуть 90°</button>
+          <label class="c half"><input type="checkbox" id="mirror">Зеркально</label>
+        </div>
+      </fieldset>
+
+      <fieldset id="txtG" class="off"><legend>Текст</legend>
+        <div class="g">
+          <textarea id="txt" rows="4" class="full"></textarea>
+          <select id="font" class="full"></select>
+          <span>Размер, пт</span><input type="number" id="pt" step="0.5" min="1"><span>Цвет</span><input type="color" id="color" style="width:100%;height:30px">
+          <label class="c half"><input type="checkbox" id="bold">Жирный</label><label class="c half"><input type="checkbox" id="italic">Курсив</label>
+          <select id="align" class="half"><option value="left">Слева</option><option value="center">По центру</option><option value="right">Справа</option><option value="justify">По ширине</option></select>
+          <label class="c half"><input type="checkbox" id="border">Рамка</label>
+          <button class="full" onclick="fitHeight()">Высота по тексту</button>
+        </div>
+      </fieldset>
+
+      <fieldset><legend>Печать</legend>
+        <div class="g">
+          <select id="paper" class="full">
+            <option value="sheet" selected>Бумага = размер листа (фотобумага 10×15 и т.п.)</option>
+            <option value="a4c">Бумага A4: лист в левом верхнем углу</option>
+            <option value="a4m">Бумага A4: лист по центру</option>
+            <option value="a5c">Бумага A5: лист в левом верхнем углу</option>
+          </select>
+          <span>Подгонка X</span><input type="number" id="pox" step="0.05" value="0"><span>Y</span><input type="number" id="poy" step="0.05" value="0">
+          <label class="c full"><input type="checkbox" id="pgrid">Печатать клетку</label>
+          <label class="c full"><input type="checkbox" id="pframe" checked>Рамка обрезки (тонкая линия)</label>
+          <button class="full" onclick="testRuler()">Тест: добавить рамку 100×10 мм</button>
+        </div>
+        <div class="tip">Фотобумага 10×15: выберите лист «Фото 10×15 см» и бумагу «= размер листа». В окне печати Chrome: «Размер бумаги» — 4 x 6 дюймов, «Поля» — Нет, «Колонтитулы» выкл., «Фон» вкл. Реальный размер: в окне печати «Масштаб — 100%», «Поля — Нет», «Колонтитулы» выключить. «Сохранить как PDF» — тоже оттуда.</div>
+      </fieldset>
+    </div>
+  </div>
+  <div id="status">Перетащите фото в окно или Ctrl+V. Стрелки — сдвиг на 0,1 мм (Shift — 1 мм). Delete — удалить.</div>
+</div>
+
+<div id="pvWrap">
+  <div class="pvbar">
+    <button class="pri" onclick="window.print()">🖨 Печатать</button>
+    <button onclick="closePreview()">✕ Закрыть</button>
+    <span style="color:#ccc">В окне печати: <b>Размер бумаги</b> = как лист (для 10×15 — «4 x 6 дюймов»), <b>Поля</b> = Нет, <b>Колонтитулы</b> = выкл, <b>Фон</b> = вкл, <b>Масштаб</b> = 100.</span>
+  </div>
+  <div id="pvStage"><div id="pp"></div></div>
+</div>
+
+<input type="file" id="fileImg" accept="image/*" multiple hidden>
+<input type="file" id="fileProj" accept=".json,.pmp" hidden>
+
+<script>
+const PX = 96 / 25.4;            // CSS-пикселей в 1 мм
+const $ = id => document.getElementById(id);
+const r2 = v => Math.round(v * 100) / 100;
+const PRESETS = [
+  ["Тетрадный лист 165×205",165,205],["Тетрадный разворот 330×205",330,205],
+  ["A4 210×297",210,297],["A4 альбомный 297×210",297,210],["A5 148×210",148,210],
+  ["Фото 4×6 дюйма (10×15 см, фотобумага)",101.6,152.4],["Фото 10×15 см ровно",100,150],["Фото 6×4 дюйма альбомное",152.4,101.6],["Фото 15×10 см ровно",150,100],["Фото 9×12 см",90,120],
+  ["Фото 13×18 см",130,180],["Произвольный",0,0]];
+const FONTS = ["Arial","Times New Roman","Calibri","Verdana","Tahoma","Georgia","Courier New","Comic Sans MS","Segoe Print","Segoe Script","Impact"];
+
+let S = { sheet:{w:165,h:205,grid:true,step:5,gx:0,gy:0}, items:[], sel:null, zoom:1, snap:0 };
+let nextId = 1, undo = [], lastF = null;
+
+/* ---------- утилиты ---------- */
+const cur = () => S.items.find(i => i.id === S.sel);
+const sn = v => S.snap > 0 ? Math.round(v / S.snap) * S.snap : v;
+function snapshot(){ undo.push({sheet:{...S.sheet}, items:S.items.map(i=>({...i}))}); if(undo.length>60) undo.shift(); }
+function doUndo(){ const s = undo.pop(); if(!s) return; S.sheet=s.sheet; S.items=s.items; S.sel=null; syncSheetUI(); render(); updatePanel(); }
+function save(k,v){ try{ localStorage.setItem('pm_'+k, v);}catch(e){} }
+function load(k,d){ try{ const v=localStorage.getItem('pm_'+k); return v===null?d:v;}catch(e){return d;} }
+
+/* ---------- отрисовка (общая для экрана и печати) ---------- */
+function gridCSS(el, on){
+  const s = S.sheet;
+  if(!on){ el.style.backgroundImage='none'; return; }
+  const c = '#9cc3e8';
+  el.style.backgroundImage = `linear-gradient(to right,${c} .12mm,transparent .12mm),linear-gradient(to bottom,${c} .12mm,transparent .12mm)`;
+  el.style.backgroundSize = `${s.step}mm ${s.step}mm`;
+  el.style.backgroundPosition = `${s.gx}mm ${s.gy}mm`;
+}
+function mk(it, ia){
+  const el = document.createElement('div');
+  el.className = 'it'; el.dataset.id = it.id;
+  el.style.cssText = `left:${it.x}mm;top:${it.y}mm;width:${it.w}mm;height:${it.h}mm;z-index:${it.z}`;
+  if(!ia) el.style.cursor='default';
+  if(it.type === 'img'){
+    const im = document.createElement('img');
+    const sw = it.rot % 180 ? it.h : it.w, shh = it.rot % 180 ? it.w : it.h;
+    im.src = it.src; im.draggable = false;
+    im.style.cssText = `position:absolute;left:50%;top:50%;width:${sw}mm;height:${shh}mm;max-width:none;` +
+      `transform:translate(-50%,-50%) rotate(${it.rot}deg) scaleX(${it.mirror?-1:1});opacity:${it.alpha};pointer-events:none`;
+    el.style.overflow = 'hidden';
+    el.appendChild(im);
+  } else {
+    const t = document.createElement('div'); t.className='tx'; t.textContent = it.text;
+    t.style.cssText = `font-family:"${it.font}",sans-serif;font-size:${it.pt}pt;font-weight:${it.bold?700:400};` +
+      `font-style:${it.italic?'italic':'normal'};text-align:${it.align};color:${it.color};` +
+      (it.border ? 'border:.3mm solid '+it.color+';' : '');
+    el.appendChild(t);
+  }
+  if(ia){
+    const hd = document.createElement('div'); hd.className='hd'; el.appendChild(hd);
+    el.addEventListener('pointerdown', e => startDrag(e, it, e.target === hd ? 'size' : 'move'));
+  }
+  return el;
+}
+function render(){
+  const sh = $('sheet'); sh.innerHTML = '';
+  S.items.slice().sort((a,b)=>a.z-b.z).forEach(it => {
+    const el = mk(it, true); if(it.id===S.sel) el.classList.add('sel'); sh.appendChild(el);
+  });
+  layoutSheet();
+}
+function refreshEl(it){
+  const old = document.querySelector(`#sheet [data-id="${it.id}"]`);
+  const n = mk(it, true); if(it.id===S.sel) n.classList.add('sel');
+  if(old) old.replaceWith(n);
+}
+function layoutSheet(){
+  const {w,h} = S.sheet, sh = $('sheet');
+  sh.style.width = w+'mm'; sh.style.height = h+'mm';
+  sh.style.transform = `scale(${S.zoom})`; sh.style.setProperty('--z', S.zoom);
+  $('sheetWrap').style.width = w*PX*S.zoom+'px'; $('sheetWrap').style.height = h*PX*S.zoom+'px';
+  gridCSS(sh, S.sheet.grid);
+  sh.querySelectorAll('.fold').forEach(e=>e.remove());
+  if(w === 330){ const f=document.createElement('div'); f.className='fold'; sh.appendChild(f); }
+}
+
+/* ---------- выбор и перетаскивание ---------- */
+function select(id){
+  S.sel = id;
+  document.querySelectorAll('#sheet .it').forEach(e => e.classList.toggle('sel', +e.dataset.id === id));
+  updatePanel();
+}
+function startDrag(e, it, mode){
+  if(e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation();
+  select(it.id); snapshot();
+  const sx=e.clientX, sy=e.clientY, ox=it.x, oy=it.y, ow=it.w, oh=it.h, k=1/(S.zoom*PX);
+  const mv = ev => {
+    const dx=(ev.clientX-sx)*k, dy=(ev.clientY-sy)*k;
+    if(mode==='move'){ it.x=r2(sn(ox+dx)); it.y=r2(sn(oy+dy)); }
+    else {
+      const w=Math.max(1, sn(ow+dx));
+      it.w=r2(w); it.h=r2(it.keep ? w/it.ratio : Math.max(1, sn(oh+dy)));
+    }
+    refreshEl(it); updatePanel();
+  };
+  const up = () => { removeEventListener('pointermove',mv); removeEventListener('pointerup',up); };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up);
+}
+$('view').addEventListener('pointerdown', e => { if(!e.target.closest('.it')) select(null); });
+$('view').addEventListener('mousemove', e => {
+  const r = $('sheet').getBoundingClientRect(), k = 1/(S.zoom*PX);
+  $('status').textContent = `X: ${((e.clientX-r.left)*k).toFixed(1)} мм   Y: ${((e.clientY-r.top)*k).toFixed(1)} мм   Масштаб на экране: ${Math.round(S.zoom*100)}%`;
+});
+
+/* ---------- панель ---------- */
+function setV(id, v){ const e=$(id); if(document.activeElement!==e) e.value=v; }
+function updatePanel(){
+  const it = cur();
+  $('objG').classList.toggle('off', !it);
+  $('imgG').classList.toggle('off', !(it && it.type==='img'));
+  $('txtG').classList.toggle('off', !(it && it.type==='text'));
+  if(!it) return;
+  setV('x',r2(it.x)); setV('y',r2(it.y)); setV('w',r2(it.w)); setV('h',r2(it.h)); $('keep').checked = it.keep;
+  if(it.type==='img'){ setV('alpha',Math.round(it.alpha*100)); $('mirror').checked = it.mirror; }
+  else {
+    setV('txt',it.text); setV('font',it.font); setV('pt',it.pt); setV('color',it.color); setV('align',it.align);
+    $('bold').checked=it.bold; $('italic').checked=it.italic; $('border').checked=it.border;
+  }
+}
+$('side').addEventListener('focusin', e => { if(e.target!==lastF){ lastF=e.target; snapshot(); } });
+['x','y','w','h'].forEach(k => $(k).addEventListener('input', () => {
+  const it = cur(), v = parseFloat($(k).value); if(!it || isNaN(v)) return;
+  if(k==='w'){ it.w=Math.max(1,v); if(it.keep) it.h=r2(it.w/it.ratio); }
+  else if(k==='h'){ it.h=Math.max(1,v); if(it.keep) it.w=r2(it.h*it.ratio); }
+  else it[k]=v;
+  refreshEl(it); updatePanel();
+}));
+$('keep').onchange = () => { const it=cur(); if(it){ it.keep=$('keep').checked; if(it.keep) it.ratio=it.w/it.h; } };
+function bindProp(id, key, conv=v=>v, isCheck=false){
+  $(id).addEventListener(isCheck?'change':'input', () => {
+    const it=cur(); if(!it) return; it[key]=conv(isCheck?$(id).checked:$(id).value); refreshEl(it);
+  });
+}
+bindProp('alpha','alpha',v=>v/100); bindProp('mirror','mirror',v=>v,true);
+bindProp('txt','text'); bindProp('font','font'); bindProp('pt','pt',v=>parseFloat(v)||1);
+bindProp('color','color'); bindProp('align','align');
+bindProp('bold','bold',v=>v,true); bindProp('italic','italic',v=>v,true); bindProp('border','border',v=>v,true);
+
+document.querySelectorAll('[data-al]').forEach(b => b.onclick = () => {
+  const it=cur(); if(!it) return; snapshot();
+  const W=S.sheet.w, H=S.sheet.h, m=b.dataset.al;
+  if(m==='fit'){ const k=Math.min(W/it.w,H/it.h); it.w=r2(it.w*k); it.h=r2(it.h*k); }
+  if(m==='tl'||m==='bl') it.x=0;
+  if(m==='tr'||m==='br') it.x=r2(W-it.w);
+  if(m==='tl'||m==='tr') it.y=0;
+  if(m==='bl'||m==='br') it.y=r2(H-it.h);
+  if(m==='cx'||m==='c'||m==='fit') it.x=r2((W-it.w)/2);
+  if(m==='cy'||m==='c'||m==='fit') it.y=r2((H-it.h)/2);
+  refreshEl(it); updatePanel();
+});
+function zOrder(d){ const it=cur(); if(!it) return; snapshot(); const zs=S.items.map(i=>i.z); it.z = d>0 ? Math.max(...zs)+1 : Math.min(...zs)-1; render(); }
+function dupItem(){ const it=cur(); if(!it) return; snapshot(); const n={...it,id:nextId++,x:r2(it.x+5),y:r2(it.y+5),z:Math.max(...S.items.map(i=>i.z))+1}; S.items.push(n); render(); select(n.id); }
+function delItem(){ if(S.sel==null) return; snapshot(); S.items=S.items.filter(i=>i.id!==S.sel); S.sel=null; render(); updatePanel(); }
+function rotImg(){ const it=cur(); if(!it||it.type!=='img') return; snapshot(); it.rot=(it.rot+90)%360; [it.w,it.h]=[it.h,it.w]; it.ratio=1/it.ratio; refreshEl(it); updatePanel(); }
+function fitHeight(){
+  const it=cur(); if(!it||it.type!=='text') return; snapshot();
+  const el=document.querySelector(`#sheet [data-id="${it.id}"]`), t=el.querySelector('.tx');
+  el.style.height='auto'; t.style.height='auto';
+  it.h = r2(Math.max(1, t.offsetHeight/PX + 0.5)); refreshEl(it); updatePanel();
+}
+
+/* ---------- добавление ---------- */
+function addItem(o){ snapshot(); const it={id:nextId++,x:0,y:0,keep:false,ratio:o.w/o.h,z:Math.max(0,...S.items.map(i=>i.z))+1,...o}; S.items.push(it); render(); select(it.id); return it; }
+function addText(){ addItem({type:'text',w:80,h:30,text:'Введите текст',font:'Arial',pt:14,bold:false,italic:false,align:'left',color:'#000000',border:false}); }
+function testRuler(){ addItem({type:'text',w:100,h:10,text:'100 мм',font:'Arial',pt:10,bold:false,italic:false,align:'center',color:'#000000',border:true}); }
+function addImgFile(file, x=0, y=0){
+  const r=new FileReader();
+  r.onload=()=>{ const im=new Image(); im.onload=()=>{
+    let w=im.naturalWidth/300*25.4, h=im.naturalHeight/300*25.4;
+    const k=Math.min(1,S.sheet.w/w,S.sheet.h/h); w*=k; h*=k;
+    addItem({type:'img',src:r.result,x:r2(Math.max(0,x)),y:r2(Math.max(0,y)),w:r2(w),h:r2(h),keep:true,ratio:im.naturalWidth/im.naturalHeight,rot:0,mirror:false,alpha:1});
+  }; im.src=r.result; };
+  r.readAsDataURL(file);
+}
+$('fileImg').onchange = e => { [...e.target.files].forEach(f=>addImgFile(f)); e.target.value=''; };
+$('view').addEventListener('dragover', e => e.preventDefault());
+$('view').addEventListener('drop', e => {
+  e.preventDefault();
+  const r=$('sheet').getBoundingClientRect(), k=1/(S.zoom*PX);
+  [...e.dataTransfer.files].filter(f=>f.type.startsWith('image/')).forEach(f=>addImgFile(f,(e.clientX-r.left)*k,(e.clientY-r.top)*k));
+});
+addEventListener('paste', e => {
+  if(/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  for(const it of e.clipboardData.items) if(it.type.startsWith('image/')) addImgFile(it.getAsFile());
+});
+addEventListener('keydown', e => {
+  if($('pvWrap').classList.contains('open')){ if(e.key==='Escape') closePreview(); return; }
+  if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z'){ e.preventDefault(); doUndo(); return; }
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='d'){ e.preventDefault(); dupItem(); return; }
+  const it=cur(); if(!it) return;
+  const st = e.shiftKey ? 1 : 0.1;
+  const d = {ArrowLeft:[-st,0],ArrowRight:[st,0],ArrowUp:[0,-st],ArrowDown:[0,st]}[e.key];
+  if(d){ e.preventDefault(); snapshot(); it.x=r2(it.x+d[0]); it.y=r2(it.y+d[1]); refreshEl(it); updatePanel(); }
+  else if(e.key==='Delete'||e.key==='Backspace'){ delItem(); }
+});
+
+/* ---------- лист ---------- */
+PRESETS.forEach((p,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=p[0]; $('preset').appendChild(o); });
+FONTS.forEach(f=>{ const o=document.createElement('option'); o.value=o.textContent=f; $('font').appendChild(o); });
+function syncSheetUI(){
+  const s=S.sheet; $('sw').value=s.w; $('sh').value=s.h; $('grid').checked=s.grid; $('gstep').value=s.step; $('gx').value=s.gx; $('gy').value=s.gy;
+  const i=PRESETS.findIndex(p=>p[1]===s.w&&p[2]===s.h); $('preset').value = i<0 ? PRESETS.length-1 : i;
+  layoutSheet();
+}
+function setSheet(w,h){ snapshot(); S.sheet.w=w; S.sheet.h=h; syncSheetUI(); fitZoom(); }
+$('preset').onchange = () => { const p=PRESETS[$('preset').value]; if(p[1]) setSheet(p[1],p[2]); };
+['sw','sh'].forEach(id => $(id).addEventListener('change', () => { const w=parseFloat($('sw').value), h=parseFloat($('sh').value); if(w>=10&&h>=10) setSheet(w,h); }));
+['grid','gstep','gx','gy'].forEach(id => $(id).addEventListener('input', () => {
+  S.sheet.grid=$('grid').checked; S.sheet.step=Math.max(1,parseFloat($('gstep').value)||5);
+  S.sheet.gx=parseFloat($('gx').value)||0; S.sheet.gy=parseFloat($('gy').value)||0; layoutSheet();
+}));
+$('snap').onchange = () => S.snap = parseFloat($('snap').value);
+function zoomBy(f){ S.zoom=Math.min(8,Math.max(0.1,S.zoom*f)); layoutSheet(); }
+function fitZoom(){
+  const v=$('view'); S.zoom=Math.min((v.clientWidth-90)/(S.sheet.w*PX),(v.clientHeight-90)/(S.sheet.h*PX));
+  S.zoom=Math.max(0.1,S.zoom); layoutSheet();
+}
+$('view').addEventListener('wheel', e => { if(e.ctrlKey){ e.preventDefault(); zoomBy(e.deltaY<0?1.1:1/1.1); } }, {passive:false});
+addEventListener('resize', ()=>{ if(!$('pvWrap').classList.contains('open')) layoutSheet(); });
+
+/* ---------- проект ---------- */
+function saveProject(){
+  const blob=new Blob([JSON.stringify({sheet:S.sheet,items:S.items})],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='printmaster-project.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+$('fileProj').onchange = e => {
+  const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{ const d=JSON.parse(r.result); snapshot(); S.sheet=d.sheet; S.items=d.items; nextId=Math.max(0,...S.items.map(i=>i.id))+1; S.sel=null; syncSheetUI(); render(); fitZoom(); updatePanel(); }catch(err){ alert('Не удалось открыть проект: '+err.message); } };
+  r.readAsText(f); e.target.value='';
+};
+
+/* ---------- печать ---------- */
+function paperInfo(){
+  const v=$('paper').value, W=S.sheet.w, H=S.sheet.h;
+  if(v==='sheet') return {pw:W,ph:H,ox:0,oy:0};
+  let [pw,ph] = v==='a5c' ? [148,210] : [210,297];
+  if((W>pw||H>ph) && W<=ph && H<=pw) [pw,ph]=[ph,pw];   // альбомная бумага, если так помещается
+  return v==='a4m' ? {pw,ph,ox:(pw-W)/2,oy:(ph-H)/2} : {pw,ph,ox:0,oy:0};
+}
+function buildPP(){
+  const P=paperInfo(), pp=$('pp'); pp.innerHTML='';
+  pp.style.width=P.pw+'mm'; pp.style.height=(P.ph-0.3)+'mm';
+  const ps=document.createElement('div'); ps.className='ps';
+  ps.style.cssText=`left:${P.ox+(parseFloat($('pox').value)||0)}mm;top:${P.oy+(parseFloat($('poy').value)||0)}mm;width:${S.sheet.w}mm;height:${S.sheet.h}mm`;
+  if($('pgrid').checked && S.sheet.grid) gridCSS(ps,true);
+  S.items.slice().sort((a,b)=>a.z-b.z).forEach(it=>ps.appendChild(mk(it,false)));
+  if($('pframe').checked){ const f=document.createElement('div'); f.style.cssText='position:absolute;inset:0;border:.15mm solid #777;pointer-events:none'; ps.appendChild(f); }
+  pp.appendChild(ps);
+  $('pageStyle').textContent=`@page{size:${P.pw}mm ${P.ph}mm;margin:0}`;
+  return P;
+}
+function showPreview(){
+  const P=buildPP();
+  $('pvWrap').classList.add('open');
+  const s=Math.min((innerWidth-40)/(P.pw*PX),(innerHeight-90)/(P.ph*PX));
+  $('pvStage').style.width=P.pw*PX*s+'px'; $('pvStage').style.height=P.ph*PX*s+'px';
+  $('pp').style.transform=`scale(${s})`;
+}
+function closePreview(){ $('pvWrap').classList.remove('open'); }
+addEventListener('beforeprint', buildPP);   // на случай Ctrl+P
+['paper','pox','poy','pgrid','pframe'].forEach(id => $(id).addEventListener('change', () => {
+  save(id, $(id).type==='checkbox' ? ($(id).checked?'1':'0') : $(id).value);
+  if($('pvWrap').classList.contains('open')) showPreview();
+}));
+['paper','pox','poy'].forEach(id => $(id).value = load(id,$(id).value));
+['pgrid','pframe'].forEach(id => $(id).checked = load(id, $(id).checked?'1':'0')==='1');
+
+/* ---------- старт ---------- */
+syncSheetUI(); render(); fitZoom(); updatePanel();
+</script>
+</body>
+</html>
